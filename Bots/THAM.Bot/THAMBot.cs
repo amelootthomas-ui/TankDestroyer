@@ -5,7 +5,7 @@ using TankDestroyer.API;
 
 namespace THAM.Bot;
 
-[Bot("Thomas", "Former Antmaster", "ECF207")]
+[Bot("Thomas", "Former Antmaster", "BA2C0D")]
 public class THAMBot : IPlayerBot
 {
     private bool _initialized;
@@ -22,10 +22,19 @@ public class THAMBot : IPlayerBot
 
     private (int x, int y)? _lastPos;
     private Direction? _lastMoveDir;
-    private Random _rng = new();
 
     private static readonly Direction[] AllDirections =
         { Direction.North, Direction.West, Direction.South, Direction.East };
+
+    // Helper components (improve SRP by delegating pathfinding and movement scoring)
+    private readonly PathFinder _pathFinder;
+    private readonly MovementEvaluator _movementEvaluator;
+
+    public THAMBot()
+    {
+        _pathFinder = new PathFinder(this);
+        _movementEvaluator = new MovementEvaluator(this);
+    }
 
     public void DoTurn(ITurnContext turnContext)
     {
@@ -35,8 +44,6 @@ public class THAMBot : IPlayerBot
         if (mapAvailable) EnsureInitialized(turnContext);
 
         var current = turnContext.Tank;
-
-        // Anti-stuck — vergelijk positie aan het begin van de beurt
         bool stuck = _lastPos.HasValue && _lastPos.Value == (current.X, current.Y);
         _lastPos = (current.X, current.Y);
 
@@ -44,7 +51,6 @@ public class THAMBot : IPlayerBot
             .Where(t => t.OwnerId != current.OwnerId && !t.Destroyed)
             .ToList();
 
-        // DOEL: Zwakste vijand eerst, bij gelijke gezondheid beslis op afstand
         var target = enemies
             .OrderBy(t => t.Health)
             .ThenBy(t => Math.Abs(t.X - current.X) + Math.Abs(t.Y - current.Y))
@@ -57,31 +63,17 @@ public class THAMBot : IPlayerBot
 
         if (stuck)
         {
-            // Probeer een pad naar de vijand te vinden in plaats van willekeurig ontsnappen
-            if (target != null)
-            {
-                var pathDir = FindPathToClearShot(turnContext, target) ?? FindPathMoveTowards(turnContext, target.X, target.Y);
-                if (pathDir.HasValue)
-                {
-                    moveDir = pathDir;
-                }
-            }
-
-            // Terugval als pad niet gevonden wordt
-            if (!moveDir.HasValue)
-            {
-                moveDir = FindAnySafeDirection(turnContext, forceExclude: _lastMoveDir)
-                       ?? FindAnySafeDirection(turnContext);
-            }
+            moveDir = (target != null ? FindPathToClearShot(turnContext, target) : null)
+                      ?? FindAnySafeDirection(turnContext, _lastMoveDir)
+                      ?? FindAnySafeDirection(turnContext);
         }
         else
         {
-            // BEWEGING: Richtingen scoren op kogelgevaar + lokbonus + nabijheid van vijanden
             moveDir =
-                FindBestMoveTowardsClearViewEnemy(turnContext, enemies, bullets)
-                ?? FindSafestDirection(turnContext, enemies, bullets)
+                FindBestMoveTowardsClearViewEnemy(turnContext, enemies, bullets, target)
                 ?? (target != null ? FindPathToClearShot(turnContext, target) : null)
-                ?? (target != null ? FindPathMoveTowards(turnContext, target.X, target.Y) : null);
+                ?? (target != null ? FindPathMoveTowards(turnContext, target.X, target.Y) : null)
+                ?? FindSafestDirection(turnContext, enemies, bullets);
         }
 
         if (moveDir.HasValue)
@@ -90,37 +82,50 @@ public class THAMBot : IPlayerBot
             _lastMoveDir = moveDir.Value;
         }
 
-        // --- ROTATIE ---
-        if (target != null)
+        // --- ROTATIE & TARGETING ---
+        if (enemies.Any())
         {
             var myNextPos = moveDir.HasValue
                 ? GetNextPosition(current.X, current.Y, moveDir.Value)
                 : (x: current.X, y: current.Y);
 
-            // Vergelijk voorspelling van vorige beurt met waar de vijand werkelijk eindigde
-            if (_enemyPredictedPos.TryGetValue(target.OwnerId, out var lastPredicted))
+            // 1. Zoek target met clear line of fire
+            var lofTarget = enemies
+                .Where(e => HasClearLineOfFireFrom(turnContext, myNextPos.x, myNextPos.y, e.X, e.Y))
+                .OrderBy(e => e.Health)
+                .ThenBy(e => Math.Abs(e.X - myNextPos.x) + Math.Abs(e.Y - myNextPos.y))
+                .FirstOrDefault();
+
+            // 2. fallback naar standaard target
+            var shootTarget = lofTarget ?? target;
+
+            if (shootTarget != null)
             {
-                bool predictionWasCorrect = lastPredicted == (target.X, target.Y);
-                _enemyMissCounter[target.OwnerId] = predictionWasCorrect
-                    ? 0
-                    : _enemyMissCounter.GetValueOrDefault(target.OwnerId) + 1;
+                // prediction logica
+                if (_enemyPredictedPos.TryGetValue(shootTarget.OwnerId, out var lastPredicted))
+                {
+                    bool predictionWasCorrect = lastPredicted == (shootTarget.X, shootTarget.Y);
+                    _enemyMissCounter[shootTarget.OwnerId] =
+                        predictionWasCorrect ? 0 : _enemyMissCounter.GetValueOrDefault(shootTarget.OwnerId) + 1;
+                }
+
+                int misses = _enemyMissCounter.GetValueOrDefault(shootTarget.OwnerId);
+
+                (int x, int y) predicted =
+                    misses >= 3
+                    ? (shootTarget.X, shootTarget.Y)
+                    : PredictEnemyPosition(shootTarget);
+
+                _enemyPredictedPos[shootTarget.OwnerId] = predicted;
+
+                var dx = predicted.x - myNextPos.x;
+                var dy = predicted.y - myNextPos.y;
+
+                turnContext.RotateTurret(GetApproximateDirection(dx, dy));
             }
-
-            int misses = _enemyMissCounter.GetValueOrDefault(target.OwnerId);
-            (int x, int y) predicted = misses >= 3
-                ? (target.X, target.Y)          // prediction unreliable — aim at current pos
-                : PredictEnemyPosition(target);
-
-            // Sla op wat we deze beurt voorspelden om volgende beurt te controleren
-            _enemyPredictedPos[target.OwnerId] = predicted;
-
-            var dx = predicted.x - myNextPos.x;
-            var dy = predicted.y - myNextPos.y;
-
-            turnContext.RotateTurret(GetApproximateDirection(dx, dy));
         }
 
-        // --- VUUR --- (geen straf, altijd vuren)
+        // 🔥 ALTJD SCHIETEN (geen checks)
         turnContext.Fire();
     }
 
@@ -132,74 +137,93 @@ public class THAMBot : IPlayerBot
     // Geeft alleen een richting terug als minstens één vijand een vrije vuurlijn heeft.
     // =============================================================
     private Direction? FindBestMoveTowardsClearViewEnemy(
-        ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets)
+    ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets, ITank? primaryTarget)
     {
-        if (!enemies.Any()) return null;
-
-        var current = turnContext.Tank;
-
-        var scored = AllDirections
-            .Select(d =>
-            {
-                var next = GetNextPosition(current.X, current.Y, d);
-                if (!CanMoveTo(turnContext, next.x, next.y))
-                    return (dir: d, score: int.MaxValue, hasLof: false);
-
-                int danger = EvaluateBulletDanger(turnContext, next.x, next.y, bullets);
-                if (danger > 300)   // too hot — skip
-                    return (dir: d, score: int.MaxValue, hasLof: false);
-
-                // FIX BAIT: now actually used in scoring
-                int baitBonus = IsGoodBaitPosition(turnContext, next.x, next.y, enemies) ? -200 : 0;
-
-                bool hasLof = enemies.Any(e =>
-                    HasClearLineOfFireFrom(turnContext, next.x, next.y, e.X, e.Y));
-
-                int distScore = enemies
-                    .Where(e => HasClearLineOfFireFrom(turnContext, next.x, next.y, e.X, e.Y))
-                    .Select(e => Math.Abs(e.X - next.x) + Math.Abs(e.Y - next.y))
-                    .DefaultIfEmpty(int.MaxValue / 2)
-                    .Min();
-
-                int score = danger + baitBonus + distScore * 10;
-                return (dir: d, score, hasLof);
-            })
-            .Where(s => s.score < int.MaxValue && s.hasLof)
-            .OrderBy(s => s.score)
-            .ToList();
-
-        return scored.Any() ? scored[0].dir : null;
+        return _movementEvaluator.FindBestMoveTowardsClearViewEnemy(turnContext, enemies, bullets, primaryTarget);
     }
 
     // =============================================================
     // Kies het begaanbare vakje met de laagste kogelgevaar-score,
     // met voorkeur voor lokposities en bewegen richting vijanden.
     // =============================================================
-    private Direction? FindSafestDirection(
-        ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets)
+    private Direction? FindSafestDirection(ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets)
     {
-        var current = turnContext.Tank;
+        return _movementEvaluator.FindSafestDirection(turnContext, enemies, bullets);
+    }
 
-        return AllDirections
-            .Select(d =>
-            {
-                var next = GetNextPosition(current.X, current.Y, d);
-                if (!CanMoveTo(turnContext, next.x, next.y))
-                    return (dir: d, score: int.MaxValue);
+    // Helper that encapsulates movement scoring and heuristics
+    private sealed class MovementEvaluator
+    {
+        private readonly THAMBot _owner;
 
-                int danger = EvaluateBulletDanger(turnContext, next.x, next.y, bullets);
-                int baitBonus = IsGoodBaitPosition(turnContext, next.x, next.y, enemies) ? -200 : 0;
-                int dist = enemies
-                    .Select(e => Math.Abs(e.X - next.x) + Math.Abs(e.Y - next.y))
-                    .DefaultIfEmpty(0)
-                    .Min();
+        public MovementEvaluator(THAMBot owner) => _owner = owner;
 
-                return (dir: d, score: danger + baitBonus + dist * 5);
-            })
-            .Where(s => s.score < int.MaxValue)
-            .OrderBy(s => s.score)
-            .Select(s => (Direction?)s.dir)
-            .FirstOrDefault();
+        public Direction? FindBestMoveTowardsClearViewEnemy(ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets, ITank? primaryTarget)
+        {
+            if (!enemies.Any()) return null;
+            var current = turnContext.Tank;
+
+            var scored = AllDirections
+                .Select(d =>
+                {
+                    var next = GetNextPosition(current.X, current.Y, d);
+                    if (!_owner.CanMoveTo(turnContext, next.x, next.y))
+                        return (dir: d, score: int.MaxValue, hasLof: false);
+
+                    int danger = _owner.EvaluateBulletDanger(turnContext, next.x, next.y, bullets);
+                    if (danger > 500) return (dir: d, score: int.MaxValue, hasLof: false);
+
+                    bool canSeeTarget = primaryTarget != null && _owner.HasClearLineOfFireFrom(turnContext, next.x, next.y, primaryTarget.X, primaryTarget.Y);
+                    int killBonus = canSeeTarget ? -600 : 0;
+
+                    bool hasLof = enemies.Any(e => _owner.HasClearLineOfFireFrom(turnContext, next.x, next.y, e.X, e.Y));
+
+                    int distScore = enemies
+                        .Where(e => _owner.HasClearLineOfFireFrom(turnContext, next.x, next.y, e.X, e.Y))
+                        .Select(e => Math.Abs(e.X - next.x) + Math.Abs(e.Y - next.y))
+                        .DefaultIfEmpty(50)
+                        .Min();
+
+                    int score = danger + killBonus + (distScore * 5);
+                    return (dir: d, score, hasLof);
+                })
+                .Where(s => s.score < int.MaxValue && s.hasLof)
+                .OrderBy(s => s.score)
+                .ToList();
+
+            return scored.Any() ? scored[0].dir : null;
+        }
+
+        public Direction? FindSafestDirection(ITurnContext turnContext, List<ITank> enemies, IBullet[] bullets)
+        {
+            var current = turnContext.Tank;
+
+            return AllDirections
+                .Select(d =>
+                {
+                    var next = GetNextPosition(current.X, current.Y, d);
+                    if (!_owner.CanMoveTo(turnContext, next.x, next.y))
+                        return (dir: d, score: int.MaxValue);
+
+                    int danger = _owner.EvaluateBulletDanger(turnContext, next.x, next.y, bullets);
+
+                    int tileBonus = 0;
+                    var tile = GetTile(turnContext, next.x, next.y);
+                    if (tile.TileType == TileType.Tree) tileBonus = -150;
+                    else if (tile.TileType == TileType.Building) tileBonus = -75;
+
+                    int dist = enemies
+                        .Select(e => Math.Abs(e.X - next.x) + Math.Abs(e.Y - next.y))
+                        .DefaultIfEmpty(0)
+                        .Min();
+
+                    return (dir: d, score: danger + (dist * 2) + tileBonus);
+                })
+                .Where(s => s.score < int.MaxValue)
+                .OrderBy(s => s.score)
+                .Select(s => (Direction?)s.dir)
+                .FirstOrDefault();
+        }
     }
 
     private (int x, int y) PredictEnemyPosition(ITank enemy)
@@ -223,123 +247,139 @@ public class THAMBot : IPlayerBot
     // respecting CanMoveTo (which blocks trees/buildings/water when initialized).
     private Direction? FindPathMoveTowards(ITurnContext turnContext, int destX, int destY)
     {
-        var current = turnContext.Tank;
-        var start = (x: current.X, y: current.Y);
-        if (start.x == destX && start.y == destY) return null;
-
-        var queue = new Queue<(int x, int y)>();
-        var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
-        var visited = new HashSet<(int x, int y)>();
-
-        queue.Enqueue(start);
-        visited.Add(start);
-
-        while (queue.Count > 0)
-        {
-            var node = queue.Dequeue();
-            if (node.x == destX && node.y == destY) break;
-
-            foreach (var d in AllDirections)
-            {
-                var next = GetNextPosition(node.x, node.y, d);
-                if (visited.Contains(next)) continue;
-                if (!CanMoveTo(turnContext, next.x, next.y)) continue;
-
-                visited.Add(next);
-                cameFrom[next] = node;
-                queue.Enqueue(next);
-            }
-        }
-
-        var dest = (x: destX, y: destY);
-
-            // Als de exacte bestemming niet bereikt is, kies het bezochte vakje dat het dichtst bij de bestemming ligt
-        if (!cameFrom.ContainsKey(dest) && !visited.Contains(dest))
-        {
-            (int x, int y)? best = null;
-            int bestDist = int.MaxValue;
-            foreach (var v in visited)
-            {
-                int dist = Math.Abs(v.x - dest.x) + Math.Abs(v.y - dest.y);
-                if (dist < bestDist)
-                {
-                    bestDist = dist;
-                    best = v;
-                }
-            }
-            if (best == null) return null;
-            dest = best.Value;
-        }
-
-            // Bouw het pad terug naar de start op
-        var path = new List<(int x, int y)>();
-        var cur = dest;
-        while (!cur.Equals(start))
-        {
-            path.Add(cur);
-            if (!cameFrom.TryGetValue(cur, out var parent)) break;
-            cur = parent;
-        }
-
-        if (path.Count == 0) return null;
-        path.Reverse();
-        var first = path[0];
-
-        int dxStep = first.x - start.x;
-        int dyStep = first.y - start.y;
-        return GetDirectionFromDelta(dxStep, dyStep);
+        return _pathFinder.FindPathMoveTowards(turnContext, destX, destY);
     }
 
     // Breadth-first search to find the first move toward any reachable tile
     // that has a clear line-of-fire to `target` (i.e. a good shooting position).
     private Direction? FindPathToClearShot(ITurnContext turnContext, ITank target)
     {
-        var current = turnContext.Tank;
-        var start = (x: current.X, y: current.Y);
+        return _pathFinder.FindPathToClearShot(turnContext, target);
+    }
 
-        if (HasClearLineOfFireFrom(turnContext, start.x, start.y, target.X, target.Y))
-            return null;
+    // Small helper class extracted to handle pathfinding responsibilities
+    private sealed class PathFinder
+    {
+        private readonly THAMBot _owner;
 
-        var queue = new Queue<(int x, int y)>();
-        var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
-        var visited = new HashSet<(int x, int y)>();
+        public PathFinder(THAMBot owner) => _owner = owner;
 
-        queue.Enqueue(start);
-        visited.Add(start);
-
-        while (queue.Count > 0)
+        public Direction? FindPathMoveTowards(ITurnContext turnContext, int destX, int destY)
         {
-            var node = queue.Dequeue();
+            var current = turnContext.Tank;
+            var start = (x: current.X, y: current.Y);
+            if (start.x == destX && start.y == destY) return null;
 
-            if (HasClearLineOfFireFrom(turnContext, node.x, node.y, target.X, target.Y))
+            var queue = new Queue<(int x, int y)>();
+            var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
+            var visited = new HashSet<(int x, int y)>();
+
+            queue.Enqueue(start);
+            visited.Add(start);
+
+            while (queue.Count > 0)
             {
-                var path = new List<(int x, int y)>();
-                var cur = node;
-                while (!cur.Equals(start))
+                var node = queue.Dequeue();
+                if (node.x == destX && node.y == destY) break;
+
+                foreach (var d in AllDirections)
                 {
-                    path.Add(cur);
-                    if (!cameFrom.TryGetValue(cur, out var parent)) break;
-                    cur = parent;
+                    var next = GetNextPosition(node.x, node.y, d);
+                    if (visited.Contains(next)) continue;
+                    if (!_owner.CanMoveTo(turnContext, next.x, next.y)) continue;
+
+                    visited.Add(next);
+                    cameFrom[next] = node;
+                    queue.Enqueue(next);
                 }
-                if (path.Count == 0) return null;
-                path.Reverse();
-                var first = path[0];
-                return GetDirectionFromDelta(first.x - start.x, first.y - start.y);
             }
 
-            foreach (var d in AllDirections)
+            var dest = (x: destX, y: destY);
+
+            if (!cameFrom.ContainsKey(dest) && !visited.Contains(dest))
             {
-                var next = GetNextPosition(node.x, node.y, d);
-                if (visited.Contains(next)) continue;
-                if (!CanMoveTo(turnContext, next.x, next.y)) continue;
-
-                visited.Add(next);
-                cameFrom[next] = node;
-                queue.Enqueue(next);
+                (int x, int y)? best = null;
+                int bestDist = int.MaxValue;
+                foreach (var v in visited)
+                {
+                    int dist = Math.Abs(v.x - dest.x) + Math.Abs(v.y - dest.y);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        best = v;
+                    }
+                }
+                if (best == null) return null;
+                dest = best.Value;
             }
+
+            var path = new List<(int x, int y)>();
+            var cur = dest;
+            while (!cur.Equals(start))
+            {
+                path.Add(cur);
+                if (!cameFrom.TryGetValue(cur, out var parent)) break;
+                cur = parent;
+            }
+
+            if (path.Count == 0) return null;
+            path.Reverse();
+            var first = path[0];
+
+            int dxStep = first.x - start.x;
+            int dyStep = first.y - start.y;
+            return GetDirectionFromDelta(dxStep, dyStep);
         }
 
-        return null;
+        public Direction? FindPathToClearShot(ITurnContext turnContext, ITank target)
+        {
+            var current = turnContext.Tank;
+            var start = (x: current.X, y: current.Y);
+
+            if (_owner.HasClearLineOfFireFrom(turnContext, start.x, start.y, target.X, target.Y))
+                return null;
+
+            var queue = new Queue<(int x, int y)>();
+            var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
+            var visited = new HashSet<(int x, int y)>();
+
+            queue.Enqueue(start);
+            visited.Add(start);
+
+            while (queue.Count > 0)
+            {
+                var node = queue.Dequeue();
+
+                if (_owner.HasClearLineOfFireFrom(turnContext, node.x, node.y, target.X, target.Y))
+                {
+                    var path = new List<(int x, int y)>();
+                    var cur = node;
+                    while (!cur.Equals(start))
+                    {
+                        path.Add(cur);
+                        if (!cameFrom.TryGetValue(cur, out var parent)) break;
+                        cur = parent;
+                    }
+                    if (path.Count == 0) return null;
+                    path.Reverse();
+                    var first = path[0];
+                    return GetDirectionFromDelta(first.x - start.x, first.y - start.y);
+                }
+
+                foreach (var d in AllDirections)
+                {
+                    var next = GetNextPosition(node.x, node.y, d);
+                    if (visited.Contains(next)) continue;
+                    if (!_owner.CanMoveTo(turnContext, next.x, next.y)) continue;
+
+                    visited.Add(next);
+                    cameFrom[next] = node;
+                    queue.Enqueue(next);
+                }
+            }
+
+            return null;
+        }
     }
 
     private static Direction? GetDirectionFromDelta(int dx, int dy)
@@ -372,31 +412,28 @@ public class THAMBot : IPlayerBot
         var dx = tx - sx;
         var dy = ty - sy;
 
+        // Controleer of de vijand op een rechte of exact diagonale lijn staat
         if (!IsAligned(dx, dy, out _)) return false;
 
         var stepX = Math.Sign(dx);
         var stepY = Math.Sign(dy);
 
         int steps = Math.Max(Math.Abs(dx), Math.Abs(dy));
-        if (steps > 6) return false;
 
+        // Loop door de cellen tussen de schutter en het doel
         for (int i = 1; i < steps; i++)
         {
-            if (IsBlockingTileAt(turnContext, sx + stepX * i, sy + stepY * i))
-                return false;
+            var checkX = sx + stepX * i;
+            var checkY = sy + stepY * i;
+
+            // Gebruik je bestaande IsBlockingTileAt om bomen en gebouwen te vinden
+            if (IsBlockingTileAt(turnContext, checkX, checkY))
+            {
+                return false; // Er staat iets in de weg!
+            }
         }
 
-        return true;
-    }
-
-    private bool IsAdjacentToBlockingTile(ITurnContext turnContext, int x, int y)
-    {
-        foreach (var (nx, ny) in new[] { (x, y + 1), (x, y - 1), (x + 1, y), (x - 1, y) })
-        {
-            if (IsBlockingTileAt(turnContext, nx, ny))
-                return true;
-        }
-        return false;
+        return true; // De baan is vrij
     }
 
     private bool CanMoveTo(ITurnContext turnContext, int x, int y)
@@ -411,7 +448,7 @@ public class THAMBot : IPlayerBot
 
         if (_initialized)
         {
-            if (_treeSet.Contains((x, y)) || _buildingSet.Contains((x, y)) || _waterSet.Contains((x, y)))
+            if (_waterSet.Contains((x, y)))
                 return false;
         }
         else
@@ -482,27 +519,6 @@ public class THAMBot : IPlayerBot
         }
 
         return danger;
-    }
-
-    // Controleert correct of er dekking naast de ontsnappingsroute is
-    private bool IsGoodBaitPosition(ITurnContext turnContext, int x, int y, List<ITank> enemies)
-    {
-        foreach (var e in enemies)
-        {
-            var dx = e.X - x;
-            var dy = e.Y - y;
-
-            if (!IsAligned(dx, dy, out _)) continue;
-            if (!HasClearLineOfFireFrom(turnContext, e.X, e.Y, x, y)) continue;
-
-            foreach (var (ex, ey) in new[] { (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1) })
-            {
-                if (!CanMoveTo(turnContext, ex, ey)) continue;
-                if (IsAdjacentToBlockingTile(turnContext, ex, ey)) return true;
-            }
-        }
-
-        return false;
     }
 
     private TurretDirection GetApproximateDirection(int dx, int dy)
