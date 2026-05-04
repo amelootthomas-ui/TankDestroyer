@@ -1,39 +1,35 @@
 <Solution>
   <Folder Name="/Bots/">
-
-    <Project Path="Bots/Example.Bot/Example.Bot.csproj" />
-    <Project Path="Bots/HDJO.Bot/HDJO.Bot.csproj" />
-    <Project Path="Bots/ThePlague.Bot/ThePlague.Bot.csproj" >
+    <Project Path="Bots/THAM.Bot/THAM.Bot.csproj" />
+    <Project Path="Bots/ThePlague.Bot/ThePlague.Bot.csproj">
        <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/Aegis.Bot/Aegis.Bot.csproj" >
+    <Project Path="Bots/Aegis.Bot/Aegis.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/Example.Bot/Example.Bot.csproj" >
+    <Project Path="Bots/DOA.Bot/DOA.Bot.csproj" />
+    <Project Path="Bots/Example.Bot/Example.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/HDJO.Bot/HDJO.Bot.csproj" >
+    <Project Path="Bots/GarbageCollector.Bot/GarbageCollector.Bot.csproj" />
+    <Project Path="Bots/HDJO.Bot/HDJO.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/Rampage.Bot/Rampage.Bot.csproj" >
+    <Project Path="Bots/Rampage.Bot/Rampage.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/Vanguard.Bot/Vanguard.Bot.csproj" >
+    <Project Path="Bots/TreeClanka.Bot/TreeClanka.Bot.csproj" />
+    <Project Path="Bots/Vanguard.Bot/Vanguard.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
     <Project Path="Bots/ANSU.Bot/ANSU.Bot.csproj">
-      <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
-    </Project>
-    <Project Path="Bots/Example.Bot/Example.Bot.csproj">
-      <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
-    </Project>
-    <Project Path="Bots/HDJO.Bot/HDJO.Bot.csproj">
       <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
     <Project Path="Bots/JorenS.Bot/JorenS.Bot.csproj">
        
   <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
+    <Project Path="Bots/SAWI.Bot/SAWI.Bot.csproj" />
       <Project Path="Bots/TankYou.Bot/TankYou.Bot.csproj">
         
   <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
@@ -41,9 +37,21 @@
     <Project Path="Bots/LISM.Bot/LISM.Bot.csproj">
           <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
-    <Project Path="Bots/Laurens.Bot/Laurens.Bot.csproj" >
+    <Project Path="Bots/Kotiba.Bot/Kotiba.Bot.csproj">
+         <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
+    </Project>
+    <Project Path="Bots/Laurens.Bot/Laurens.Bot.csproj">
       <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
+    <Project Path="Bots/PillenPower.Bot/PillenPower.Bot.csproj">
+      <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
+    </Project>
+  </Folder>
+  <Folder Name="/Bots/Example.Bot/">
+    <Project Path="Bots/Example.Bot/LeeroyJenkins.Bot.csproj" />
+  </Folder>
+  <Folder Name="/Bots/JODMO/">
+    <Project Path="Bots/JODMO/JODMO.Bot.csproj" />
   </Folder>
   <Folder Name="/Game/">
     <Project Path="Game/TankDestroyer.csproj">
@@ -58,6 +66,7 @@
       <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
   </Folder>
+  <Project Path="ShitBot.Bot/ShitBot.Bot.csproj" />
   <Project Path="TankDestroyer.Game.Console/TankDestroyer.Game.Console.csproj">
     <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     <BuildDependency Project="Source/TankDestroyer.Engine/TankDestroyer.Engine.csproj" />
