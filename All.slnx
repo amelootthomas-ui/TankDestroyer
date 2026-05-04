@@ -7,6 +7,7 @@
     <Project Path="Bots/Aegis.Bot/Aegis.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />
     </Project>
+    <Project Path="Bots/Apex.Bot/Apex.Bot.csproj" />
     <Project Path="Bots/DOA.Bot/DOA.Bot.csproj" />
     <Project Path="Bots/Example.Bot/Example.Bot.csproj">
          <BuildDependency Project="Source/TankDestroyer.API/TankDestroyer.API.csproj" />

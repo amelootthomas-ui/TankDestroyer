@@ -156,10 +156,6 @@ public class ANSUBot : IPlayerBot
                 ? new[] { Direction.North, Direction.South }
                 : new[] { Direction.East, Direction.West, Direction.North, Direction.South };
 
-        // Pick first candidate that is safe AND passable
-        foreach (var dir in candidates)
-            if (!threatened.Contains(dir) && CanMove(ctx, me, dir)) return dir;
-
         // Fallback: just move away even if not perfectly safe
         foreach (var dir in candidates)
             if (CanMove(ctx, me, dir)) return dir;
