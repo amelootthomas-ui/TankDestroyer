@@ -158,7 +158,7 @@ public class ANSUBot : IPlayerBot
 
         // Pick first candidate that is safe AND passable
         foreach (var dir in candidates)
-            if (!threatened.Contains(dir) && CanMove(ctx, myTank, dir)) return dir;
+            if (!threatened.Contains(dir) && CanMove(ctx, me, dir)) return dir;
 
         // Fallback: just move away even if not perfectly safe
         foreach (var dir in candidates)
